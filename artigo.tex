@@ -1,0 +1,584 @@
+\documentclass[12pt]{article}
+\usepackage{sbc-template}
+\usepackage{graphicx,url}
+\usepackage{booktabs}
+\usepackage[utf8]{inputenc}
+\usepackage{babel}
+\usepackage{float}
+\usepackage{multirow}
+\usepackage{amsmath}
+\usepackage{array}
+\sloppy
+
+\title{Desigualdade em Evidência: Uma Análise Socioeconômica Regional
+do Desempenho no ENEM (2012--2024)}
+
+\author{Tiago Defendi da Silva\inst{1}}
+
+\address{Departamento de Computação -- DACOM\\
+  Universidade Tecnológica Federal do Paraná -- UTFPR-CM\\
+  Campo Mourão -- PR -- Brasil
+  \email{tiagodefendi@alunos.utfpr.edu.br}
+}
+
+\begin{document}
+\maketitle
+
+\begin{resumo}
+O Exame Nacional do Ensino Médio (ENEM) é o principal meio de acesso ao
+ensino superior público no Brasil e a maior base longitudinal de dados
+educacionais do país. Embora a literatura mostre que fatores
+socioeconômicos afetam o desempenho discente, poucos estudos analisam se
+a intensidade desse efeito varia entre macrorregiões ou incorporam
+indicadores contextuais municipais, como o IDHM. Este trabalho investiga
+em que medida o perfil socioeconômico dos candidatos e o IDHM explicam a
+faixa de desempenho nas cinco macrorregiões do Brasil.
+Foram usados os Microdados do ENEM de 2012 a 2024 (cerca de 51,3 milhões
+de candidatos), integrados a indicadores do Atlas Brasil via DuckDB. Três
+conjuntos de features foram comparados (M1: variáveis individuais; M2:
+M1 + IDHM geral; M3: M1 + IDHM desagregado por cor/raça e gênero) usando
+uma bateria progressivamente ampliada de classificadores: na abordagem
+inicial, KNN, SVM e MLP com SMOTE; na abordagem estendida, Regressão
+Logística, Árvore de Decisão, Random Forest, HistGradientBoosting, SVM
+(LinearSVC), LightGBM e quatro configurações de ensemble, com
+hiperparâmetros otimizados por Algoritmo Genético. Os experimentos foram
+conduzidos sobre amostras de 1 M, 5 M e o dataset completo ($\approx$13 M
+candidatos com IDHM disponível), usando divisão estratificada por ano
+(2019--2024) e conjunto fixo de teste e validação. O melhor resultado foi
+Macro F1 = 0,4893 (SVM LinearSVC, M3, 1 M amostras, limiares 500/700) e
+Macro F1 = 0,4860 (Ensemble SVM+LGB, M2, dataset completo, limiares
+500/730). A acurácia regional revelou que o Norte apresenta maior
+facilidade de classificação (65,1\%), enquanto o Sudeste apresenta a menor
+(57,0\%), resultado contraintuitivo que merece investigação adicional.
+\end{resumo}
+
+% ================================================================
+\section{Introdução}
+% ================================================================
+
+O Exame Nacional do Ensino Médio (ENEM) é, desde sua reformulação em
+2009, o principal mecanismo de acesso ao ensino superior público no
+Brasil. Com mais de 75 milhões de inscrições acumuladas, o exame reúne
+informações únicas sobre o desempenho de candidatos de todas as regiões
+e perfis socioeconômicos.
+
+A literatura indica que renda, tipo de escola, escolaridade dos pais,
+raça e gênero estão sistematicamente associados às
+notas~\cite{jaloto2021fatores,melo2021impacto}. Contudo, a maioria dos
+estudos analisa apenas um ano, usa nota geral e não compara se o peso
+desses fatores varia entre macrorregiões~\cite{dutra2023fatores}. Poucos
+incorporam indicadores contextuais municipais como o IDHM em modelos
+preditivos.
+
+Este trabalho preenche essas lacunas integrando os microdados do ENEM
+(2012--2024) com indicadores do Atlas Brasil (IDHM geral e desagregado
+por cor/raça e gênero), treinando modelos de classificação por faixa de
+nota em três versões e avaliando o ganho do IDHM. As perguntas de
+pesquisa são:
+
+\textbf{P1:} O perfil socioeconômico e o IDHM explicam a faixa de
+desempenho no ENEM por área nas macrorregiões?
+
+\textbf{P2:} O IDHM desagregado melhora os modelos em relação ao IDHM
+geral ou às variáveis individuais?
+
+% ================================================================
+\section{Trabalhos Relacionados}
+% ================================================================
+
+Jaloto e Primi~\cite{jaloto2021fatores} analisam o ENEM 2018 com
+regressão multinível, identificando nível socioeconômico como fator de
+maior peso. Este trabalho amplia para 13 anos, adota classificação por
+faixa e compara regiões.
+
+Melo et al.~\cite{melo2021impacto} fazem análise espacial do ENEM 2018
+integrada ao IBGE por município via LASSO e I de Moran. Este trabalho
+opera em nível individual e usa IDHM desagregado como feature.
+
+Ernica e Rodrigues~\cite{ernica2020desigualdades} investigam como NSE,
+raça e gênero se combinam em metrópoles. Este trabalho aplica perspectiva
+similar em escala nacional com IDHM desagregado como contexto externo.
+
+Tertulino et al.~\cite{tertulino2026fatores} combinam Random Forest e
+SHAP no ENEM 2022 no RN com seleção Boruta. Este trabalho estende para
+escala nacional com ablation study M1/M2/M3.
+
+Kleinke~\cite{kleinke2017influencia} analisa a influência do status
+socioeconômico nos itens de Física do ENEM 2012, mostrando que o efeito
+varia conforme o tipo de questão. Este trabalho amplia essa perspectiva
+para Matemática, 13 anos de dados e comparação entre macrorregiões.
+
+Dutra et al.~\cite{dutra2023fatores} revisam sistematicamente os fatores
+que afetam o ENEM, apontando ausência de contexto municipal como lacuna.
+Este trabalho responde diretamente a essa lacuna.
+
+% ================================================================
+\section{Metodologia}
+% ================================================================
+
+\subsection{Dados}
+
+O dataset principal são os Microdados do ENEM 2012--2024~\cite{inep2024}
+(76,3 milhões brutos; 51,3 milhões após filtro de presença completa nos
+dois dias). A integração com o Atlas Brasil~\cite{pnud2017} foi feita via
+DuckDB, utilizando código IBGE do município e ano como chaves. Na versão
+atual, os dados do Atlas estão disponíveis apenas em nível estadual. A
+variável de renda Q006 foi harmonizada entre os regimes pré e pós-2015
+para cinco faixas comparáveis (A--E).
+
+\subsection{Variável Alvo}
+
+A variável alvo é a faixa de nota em Matemática, escolhida por apresentar
+a maior disparidade regional (59 pontos entre Norte e Sudeste). Na
+abordagem inicial utilizou-se a segmentação: $<$500 (Baixo), 500--700
+(Médio) e $>$700 (Alto). Na abordagem estendida, os limiares foram
+revisados para $<$500, 500--730 e $\geq$730, ajustando o ponto de corte
+superior para refletir com maior precisão a distribuição empírica das
+notas e a escassez real de candidatos com desempenho muito elevado.
+Com os novos limiares, a distribuição no conjunto de treino é: Baixo
+46,8\%, Médio 47,5\% e Alto 5,7\%, evidenciando o forte desbalanceamento
+na classe Alto.
+
+\subsection{Conjuntos de Features (Ablation Study)}
+
+São comparados três conjuntos de features: \textbf{M1} com variáveis
+individuais do candidato (renda harmonizada, escolaridade do pai e da
+mãe, cor/raça, sexo, tipo de escola, macrorregião); \textbf{M2} com M1
+acrescido do IDHM geral e seus subíndices (educação, renda, longevidade);
+e \textbf{M3}, que substitui o IDHM geral de M2 pelo IDHM desagregado
+por cor/raça (branco/negro) e por gênero (homem/mulher), mantendo as
+demais variáveis de M1.
+
+\subsection{Abordagem Inicial}
+
+Para iniciar a modelagem, foram treinados quatro classificadores: KNN,
+SVM (LinearSVC), LightGBM e MLP.
+
+\textbf{KNN} classifica cada candidato pela classe majoritária entre os
+$k$ vizinhos mais próximos. Os hiperparâmetros ($k$ e métrica de
+distância) foram otimizados por busca em grade sobre $k \in
+\{5,7,9,11,21\}$ e métrica $\in \{$euclidiana, manhattan$\}$.
+
+\textbf{SVM (LinearSVC)} encontra a fronteira de decisão de margem
+máxima. Os hiperparâmetros $C$ (em escala logarítmica, $\log_{10}(C) \in
+[-3,2]$) e \textit{class\_weight} foram otimizados por Algoritmo
+Genético (população de 25 indivíduos, 20 gerações, fitness calculado em
+subconjunto de 30 mil amostras).
+
+\textbf{MLP} (três camadas densas, 256→128→64 neurônios) com SMOTE
+aplicado ao conjunto de treino para balancear as classes, rebalanceando
+de 52,3\% / 40,6\% / 7,1\% para 33,3\% por classe.
+
+\textbf{LightGBM} com hiperparâmetros otimizados por Algoritmo Genético
+(440 estimadores, 115 folhas, taxa de aprendizado 0,0289, mínimo de 79
+amostras por folha) e SMOTE sobre o mesmo subconjunto do MLP.
+
+\textbf{Ensemble:} combinação das predições de KNN, SVM e LightGBM em
+votação hard e soft, com a saída do SVM convertida em probabilidades via
+softmax antes de combinar.
+
+Os experimentos iniciais foram conduzidos sobre amostras de 500 mil a 1
+milhão de registros, com divisão em 60\% treino, 20\% validação e 20\%
+teste.
+
+\subsection{Abordagem Estendida}
+
+Diante dos resultados obtidos na abordagem inicial --- em especial o fraco
+desempenho na classe Alto e a limitada capacidade dos modelos sem
+técnicas de balanceamento ---, foi desenvolvida uma abordagem estendida
+com as seguintes diferenças metodológicas:
+
+\subsubsection{Engenharia de Features}
+
+Todas as variáveis categóricas do questionário socioeconômico (colunas
+\texttt{Q\_*}) foram sistematicamente recodificadas como valores
+ordinais inteiros, armazenadas com sufixo \texttt{\_NUM}. O ano do exame
+(\texttt{NU\_ANO}) foi incluído como feature numérica, permitindo que os
+modelos capturem tendências interanuais no desempenho e nas condições
+socioeconômicas. As features M1, M2 e M3 passaram a conter 28, 37 e 39
+variáveis, respectivamente (Tabela~\ref{tab:features}).
+
+\begin{table}[H]
+\centering
+\caption{Composição dos conjuntos de features na abordagem estendida}
+\label{tab:features}
+\small
+\begin{tabular}{lcp{8cm}}
+\toprule
+\textbf{Conjunto} & \textbf{Qtd.} & \textbf{Conteúdo} \\
+\midrule
+M1 & 28 & Variáveis individuais: NU\_ANO, macrorregião, sexo, cor/raça,
+           tipo de escola, escolaridade dos pais, renda, bens domésticos,
+           situação de trabalho, bolsa família \\
+M2 & 37 & M1 + IDHM geral, IDHM educação/renda/longevidade, renda per
+           capita, tx.\ analfabetismo, tx.\ envelhecimento, esperança de
+           vida, mortalidade infantil \\
+M3 & 39 & M2 + IDHM desagregado por cor/raça do candidato
+           (\texttt{idhm\_cand\_raca}) e por sexo
+           (\texttt{idhm\_cand\_sexo}) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+O IDHM personalizado de M3 é derivado cruzando a raça do candidato com
+o IDHM da raça correspondente no estado (\texttt{idhm\_branco} para
+brancos, \texttt{idhm\_negro} para pretos e pardos) e o sexo com o IDHM
+de gênero (\texttt{idhm\_homem}, \texttt{idhm\_mulher}), tornando o
+indicador contextual sensível à identidade do próprio candidato.
+
+\subsubsection{Divisão Estratificada por Ano}
+
+Para garantir que todos os anos de 2019 a 2024 estejam proporcionalmente
+representados em treino, validação e teste, adotou-se divisão
+estratificada por ano: para cada ano, 10\% dos candidatos foram
+reservados para o conjunto de teste e 10\% para validação, ambos
+amostrados de forma estratificada pela classe alvo; os 80\% restantes
+compõem o pool de treino. Os conjuntos de teste e validação foram salvos
+em arquivos fixos (\texttt{test\_set.parquet} e \texttt{val\_set.parquet})
+e reutilizados por todos os classificadores, garantindo comparação justa.
+O conjunto de treino é amostrado do pool remanescente a cada experimento,
+excluindo explicitamente as linhas presentes em teste e validação.
+
+\subsubsection{Algoritmos}
+
+A bateria de classificadores foi ampliada para cobrir um espectro mais
+amplo de paradigmas de aprendizado:
+
+\begin{itemize}
+  \item \textbf{Regressão Logística (LR):} modelo linear com regularização
+        L2 e solver SAGA, adequado a grandes volumes de dados.
+  \item \textbf{Árvore de Decisão (DT):} baseline interpretável,
+        profundidade máxima 12.
+  \item \textbf{Random Forest (RF):} ensemble de 80 árvores com
+        subamostragem de 10--30\% por árvore (\texttt{max\_samples}),
+        necessária para viabilizar o treino no dataset completo.
+  \item \textbf{HistGradientBoosting (HGB):} implementação sklearn de
+        gradient boosting histogramado, nativa para dados com valores
+        ausentes.
+  \item \textbf{SVM (LinearSVC):} SVM linear otimizado para grandes
+        volumes (\texttt{dual=auto}).
+  \item \textbf{LightGBM (LGB):} gradient boosting eficiente, usado com
+        300--440 estimadores.
+\end{itemize}
+
+Para os quatro modelos sensíveis a hiperparâmetros (LR, SVM, LGB, HGB),
+os hiperparâmetros foram otimizados por Algoritmo Genético (AG): os genes
+codificam o espaço de busca de cada modelo, a fitness é avaliada em um
+subconjunto de 30--50 mil amostras de treino e 10--15 mil de validação, e
+o melhor indivíduo é usado para treinar o modelo final no dataset
+completo. O AG usa seleção por torneio ($k=3$), cruzamento uniforme
+($p=0,70$), mutação gaussiana para genes contínuos e mutação de flip para
+genes binários, com elitismo preservando os dois melhores indivíduos por
+geração.
+
+Foram construídos quatro ensembles:
+
+\begin{itemize}
+  \item \textbf{Ensemble SVM+LGB Hard:} votação majoritária entre SVM e
+        LGB.
+  \item \textbf{Ensemble SVM+LGB Soft:} média de probabilidades entre
+        SVM (via SGDClassifier com \textit{modified\_huber loss}, que
+        emite probabilidades nativamente) e LGB.
+  \item \textbf{Ensemble Full Soft:} média de probabilidades de SGD-SVM,
+        LGB, RF e HGB.
+  \item \textbf{Ensemble Top-2 Soft:} ensemble dinâmico dos dois modelos
+        base com maior Macro F1 no conjunto M1, treinado e avaliado
+        também em M2 e M3.
+\end{itemize}
+
+\subsubsection{Escalabilidade: Múltiplos Tamanhos de Amostra}
+
+Para investigar o efeito do volume de treino sobre o desempenho dos
+classificadores, foram executados experimentos com tamanhos de amostra
+crescentes: \textbf{1 M} de candidatos (excluindo teste e validação),
+\textbf{5 M} e o \textbf{dataset completo} ($\approx$13,4 M candidatos
+com IDHM disponível nos anos 2019--2024). A comparação foi conduzida
+mantendo os mesmos conjuntos de teste e validação em todos os casos.
+
+\subsection{Hipóteses}
+
+\textbf{H1:} A correlação renda--desempenho é mais intensa no
+Norte/Nordeste do que no Sul/Sudeste.
+\textbf{H2:} O efeito socioeconômico é maior em Matemática e menor em
+Redação.
+\textbf{H3:} Modelos com IDHM (M2 e M3) superam em Macro F1 o modelo
+baseline M1.
+
+\subsection{Avaliação}
+
+A métrica principal é o Macro F1, por ser robusta ao desbalanceamento de
+classes e dar peso igual a todas as faixas, inclusive à minoritária
+(Alto). A Acurácia é reportada como referência complementar. Todas as
+métricas são calculadas sobre o conjunto de validação, exceto os
+resultados finais (reservados para a entrega final).
+
+% ================================================================
+\section{Resultados e Discussão}
+% ================================================================
+
+\subsection{Disparidade Regional e Correlação Renda--Desempenho}
+
+A Tabela~\ref{tab:medias} mostra as notas médias por macrorregião. A
+disparidade Norte--Sudeste é de 59 pontos em Matemática e 32,9 em
+Ciências da Natureza, padrão consistente em todos os anos da série,
+suportando H1 visualmente.
+
+\begin{table}[H]
+\centering
+\caption{Nota média por macrorregião e área (2012--2024)}
+\label{tab:medias}
+\small
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Região} & \textbf{CN} & \textbf{CH} & \textbf{LC} & \textbf{MT} & \textbf{Redação} \\
+\midrule
+Norte        & 464,6 & 504,8 & 485,4 & 473,8 & 520,5 \\
+Nordeste     & 471,6 & 510,7 & 493,2 & 491,7 & 537,0 \\
+Centro-Oeste & 485,4 & 527,5 & 508,5 & 506,6 & 548,4 \\
+Sul          & 495,9 & 541,4 & 521,7 & 526,7 & 561,4 \\
+Sudeste      & 497,5 & 544,0 & 525,5 & 532,8 & 570,9 \\
+\midrule
+\textbf{Brecha SE--N} & 32,9 & 39,2 & 40,1 & \textbf{59,0} & 50,4 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+As correlações de Spearman entre renda e nota são moderadas
+($\rho \approx 0,45$ em Matemática) e variam por macrorregião, com o
+Nordeste apresentando correlações maiores que o Sudeste, possivelmente
+por maior heterogeneidade intra-regional.
+
+\subsection{Resultados da Abordagem Inicial}
+
+O KNN sobre M1 (Macro F1 = 0,4787) serve de baseline. A
+Tabela~\ref{tab:resultados_inicial} resume os resultados iniciais.
+
+\begin{table}[H]
+\centering
+\caption{Resultados da abordagem inicial -- Macro F1 e Accuracy (validação, FAIXA\_MT)}
+\label{tab:resultados_inicial}
+\small
+\begin{tabular}{lccc}
+\toprule
+\textbf{Modelo} & \textbf{Features} & \textbf{Macro F1} & \textbf{Accuracy} \\
+\midrule
+\textbf{KNN (baseline), $k$=21, manhattan} & M1 & \textbf{0,4787} & 0,6141 \\
+KNN, $k$=11, manhattan                     & M2 & 0,4697 & 0,6014 \\
+SVM (LinearSVC) + AG                       & M1 & 0,4660 & 0,5403 \\
+SVM (LinearSVC) + AG                       & M2 & 0,4717 & 0,5453 \\
+SVM (LinearSVC) + AG, 5-CV                 & M2 & 0,4739 & 0,5463 \\
+Ensemble Hard Voting (KNN+SVM+LGB)         & M3 & 0,5142 & 0,5866 \\
+Ensemble Soft Voting (KNN+SVM+LGB)         & M3 & 0,5334 & 0,6031 \\
+MLP + SMOTE                                & M3 & 0,5081 & 0,5816 \\
+LightGBM + AG + SMOTE                      & M3 & 0,5406 & 0,6239 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+O melhor resultado inicial foi LightGBM + AG + SMOTE com Macro F1 =
+0,5406, ganho de 0,0619 sobre o baseline KNN/M1. O SMOTE foi
+determinante para elevar o recall da classe Alto de $\approx$0,00 para
+$\approx$0,37--0,40, ao custo de queda no recall de Baixo (de 0,77 para
+$\approx$0,60).
+
+\subsection{Resultados da Abordagem Estendida}
+
+\subsubsection{Comparação por Tamanho de Amostra (1 M, limiares 500/700)}
+
+A Tabela~\ref{tab:pivot_1m} apresenta o ablation study M1/M2/M3 com
+amostra de 1 M de candidatos, mostrando o Macro F1 no conjunto de
+validação para todos os classificadores. O conjunto de teste foi selado
+e não foi avaliado nesta etapa.
+
+\begin{table}[H]
+\centering
+\caption{Macro F1 por modelo e variante de features (1 M amostras, limiares 500/700, validação)}
+\label{tab:pivot_1m}
+\small
+\begin{tabular}{lccc}
+\toprule
+\textbf{Modelo} & \textbf{M1 (28)} & \textbf{M2 (37)} & \textbf{M3 (39)} \\
+\midrule
+\textbf{SVM (LinearSVC)}      & 0,4872 & 0,4892 & \textbf{0,4893} \\
+HistGradientBoosting          & 0,4691 & 0,4717 & 0,4737 \\
+LightGBM                      & 0,4682 & 0,4728 & 0,4733 \\
+Ensemble SVM+LGB Hard         & 0,4626 & 0,4665 & 0,4671 \\
+DecisionTree                  & 0,4523 & 0,4493 & 0,4436 \\
+Ensemble Full Soft            & 0,4462 & 0,4488 & 0,4500 \\
+Ensemble SVM+LGB Soft         & 0,4415 & 0,4448 & 0,4450 \\
+Ensemble Top-2 Soft           & --     & 0,4448 & 0,4461 \\
+LogisticRegression            & 0,4367 & 0,4397 & 0,4396 \\
+RandomForest                  & 0,4313 & 0,4310 & 0,4312 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Na abordagem estendida sem SMOTE, o SVM (LinearSVC) emerge como melhor
+modelo em todas as variantes, atingindo Macro F1 = 0,4893 com M3. Há
+um padrão consistente de melhora de M1 para M2 e de M2 para M3 na
+maioria dos modelos, indicando que o IDHM agrega valor preditivo
+incremental, ainda que modesto. O Random Forest apresentou os piores
+resultados entre os modelos base, possivelmente por overfitting em
+features categóricas recodificadas.
+
+\subsubsection{Dataset Completo com Novos Limiares (500/730)}
+
+Os experimentos com o dataset completo ($\approx$13,4 M candidatos de
+treino) adotaram os limiares revisados de 500 e 730 pontos. A
+Tabela~\ref{tab:resultados_full} apresenta o melhor modelo e o relatório
+de classificação no conjunto de validação.
+
+\begin{table}[H]
+\centering
+\caption{Melhor modelo -- dataset completo, limiares 500/730 (validação)}
+\label{tab:resultados_full}
+\small
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Classe} & \textbf{Precisão} & \textbf{Recall} & \textbf{F1} & \textbf{Suporte} \\
+\midrule
+Baixo ($<$500)       & 0,61 & 0,75 & 0,67 & 696.506 \\
+Médio (500--730)     & 0,62 & 0,48 & 0,54 & 707.105 \\
+Alto ($\geq$730)     & 0,23 & 0,26 & 0,24 &  85.160 \\
+\midrule
+\textbf{Macro avg}   & 0,49 & 0,49 & \textbf{0,49} & 1.488.771 \\
+Weighted avg         & 0,59 & 0,59 & 0,59 & 1.488.771 \\
+\textbf{Accuracy}    & \multicolumn{3}{c}{0,59} & 1.488.771 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+O melhor modelo no dataset completo foi o \textbf{Ensemble SVM+LGB Hard}
+sobre M2 (Macro F1 = 0,4860), resultado próximo ao SVM/M3 com 1 M
+amostras (0,4893), o que indica que o aumento de escala de 1 M para 13 M
+não produziu ganho expressivo no Macro F1 com os modelos testados. O
+desbalanceamento da classe Alto (5,7\% das amostras com os limiares
+500/730) permanece como principal limitador, com F1 = 0,24 mesmo com 13 M
+amostras de treino.
+
+\subsubsection{Análise Regional}
+
+A Tabela~\ref{tab:regional} apresenta a acurácia do melhor modelo
+(Ensemble SVM+LGB Hard, M2) por macrorregião no conjunto de validação,
+avaliando indiretamente H1.
+
+\begin{table}[H]
+\centering
+\caption{Acurácia por macrorregião -- Ensemble SVM+LGB Hard (M2),
+         dataset completo, limiares 500/730}
+\label{tab:regional}
+\small
+\begin{tabular}{lcc}
+\toprule
+\textbf{Macrorregião} & \textbf{Acurácia} & \textbf{N (validação)} \\
+\midrule
+Norte        & \textbf{0,651} & 162.381 \\
+Nordeste     & 0,602 & 537.742 \\
+Centro-Oeste & 0,579 & 122.537 \\
+Sul          & 0,576 & 161.739 \\
+Sudeste      & 0,570 & 504.372 \\
+\midrule
+\textbf{Total} & 0,590 & 1.488.771 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+O resultado mais surpreendente é que o Norte apresenta a maior acurácia
+de classificação (65,1\%), apesar de ter as menores notas médias
+(Tabela~\ref{tab:medias}). Uma hipótese explicativa é que a distribuição
+de notas no Norte é mais concentrada --- com menor variância intraclasse
+---, tornando mais fácil para o modelo atribuir corretamente a faixa. Em
+contraste, o Sudeste, apesar de ter as maiores médias, apresenta maior
+heterogeneidade interna (candidatos de escolas públicas e privadas de
+qualidade muito distinta no mesmo estado), o que dificulta a
+classificação.
+
+\subsection{Comparação das Abordagens}
+
+A Tabela~\ref{tab:comparacao} consolida os melhores resultados de cada
+abordagem.
+
+\begin{table}[H]
+\centering
+\caption{Comparação entre abordagens (validação)}
+\label{tab:comparacao}
+\small
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Abordagem} & \textbf{Modelo} & \textbf{Features} & \textbf{N treino} & \textbf{Limiares} & \textbf{Macro F1} \\
+\midrule
+Inicial    & LGB + AG + SMOTE      & M3 & 277k  & 500/700 & 0,5406 \\
+Estendida  & SVM (LinearSVC) + AG  & M3 & 1 M   & 500/700 & 0,4893 \\
+Estendida  & Ensemble SVM+LGB Hard & M2 & 13 M  & 500/730 & 0,4860 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+O LightGBM com SMOTE da abordagem inicial ainda apresenta o melhor
+Macro F1 global (0,5406), mas deve-se notar que este resultado foi obtido
+num subconjunto de apenas 277 mil registros com SMOTE agressivo, que
+pode inflar artificialmente as métricas por geração de amostras
+sintéticas próximas às reais de treino. A abordagem estendida, sem SMOTE
+e com divisão estratificada por ano e conjunto de teste fixo, oferece uma
+avaliação mais rigorosa e reprodutível, e o Macro F1 $\approx$0,49 deve
+ser interpretado como o resultado mais confiável disponível até o momento.
+
+\subsection{Discussão das Hipóteses}
+
+\textbf{H1} é parcialmente suportada pela análise exploratória: a brecha
+de 59 pontos em Matemática entre Norte e Sudeste é consistente. Contudo,
+a análise de classificação regional (Tabela~\ref{tab:regional}) revela
+que fatores regionais adicionais --- não capturados pelas features atuais
+--- influenciam a dificuldade de classificar os candidatos de diferentes
+regiões.
+
+\textbf{H3} é parcialmente confirmada: há ganho consistente de Macro F1
+de M1 para M2 e de M2 para M3 na maioria dos modelos da abordagem
+estendida (Tabela~\ref{tab:pivot_1m}), mas os ganhos são pequenos
+($\Delta \leq 0,005$), sugerindo que o IDHM estadual tem poder
+explicativo incremental limitado frente às variáveis individuais. Dados
+municipais poderiam ampliar esse ganho.
+
+\subsection{Limitações}
+
+A principal limitação desta etapa é que o IDHM está disponível apenas em
+nível estadual, reduzindo a granularidade das features de M2 e M3. A
+classe Alto permanece fortemente desbalanceada (5,7\% com limiares
+500/730), mesmo no dataset completo de 13 M registros. Os experimentos
+com 5 M de amostras foram configurados mas seus resultados definitivos
+aguardam execução completa para comparação direta com 1 M e dataset
+completo. O conjunto de teste permanece selado para garantir a validade
+da avaliação final.
+
+% ================================================================
+\section{Conclusão}
+% ================================================================
+
+Este trabalho apresentou um pipeline reprodutível para classificação da
+faixa de desempenho no ENEM com 51,3 milhões de candidatos (2012--2024),
+integrado ao Atlas Brasil via DuckDB. Duas abordagens foram desenvolvidas:
+a inicial, com KNN, SVM, MLP e LightGBM com SMOTE, obteve Macro F1 =
+0,5406 (LGB + AG + SMOTE, M3, 277 mil amostras); a estendida, com
+engenharia de features aprimorada (NU\_ANO, codificação numérica),
+divisão estratificada por ano, conjunto fixo de teste e validação, e uma
+bateria de 10 modelos e ensembles com AG para otimização de
+hiperparâmetros, alcançou Macro F1 = 0,4893 (SVM/M3, 1 M amostras) e
+0,4860 (Ensemble SVM+LGB, M2, 13 M amostras), com avaliação mais
+rigorosa e reprodutível.
+
+A análise regional revelou que o Norte tem a maior acurácia de
+classificação (65,1\%), resultado contraintuitivo frente às menores médias
+da região, hipótese atribuída à menor dispersão intraclasse. O
+desbalanceamento da classe Alto permanece o principal limitador dos
+resultados.
+
+Os próximos passos são: avaliar os modelos no conjunto de teste selado,
+completar os experimentos com 5 M de amostras, investigar técnicas de
+balanceamento compatíveis com datasets de grande escala (class weights,
+threshold calibration) e obter dados do Atlas Brasil em nível municipal
+para ampliar o poder explicativo do IDHM.
+
+\bibliographystyle{plain}
+\bibliography{referencias}
+
+\end{document}
